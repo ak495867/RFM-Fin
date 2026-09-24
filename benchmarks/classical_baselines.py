@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import torch
 from sklearn.covariance import LedoitWolf
+from scipy.optimize import minimize
 from typing import Dict, Tuple, List, Optional
 import warnings
 warnings.filterwarnings('ignore')
@@ -38,9 +39,9 @@ def solve_minimum_variance_weights(
 ) -> np.ndarray:
     """
     Computes optimal Markowitz minimum-variance portfolio weights:
-      min w^T Sigma w  s.t.  1^T w = 1
+      min w^T Sigma w  s.t.  1^T w = 1,  0 <= w_i <= max_weight
       
-    If long_only=True, solves or projects to w_i >= 0 with max individual asset cap.
+    If long_only=True, solves exact Quadratic Programming via SLSQP.
     """
     N = sigma.shape[0]
     # Symmetrize
@@ -48,34 +49,45 @@ def solve_minimum_variance_weights(
 
     # Check positive definiteness
     evals, evecs = np.linalg.eigh(sigma_sym)
-    if evals[0] <= 0:
-        # Matrix is not strictly positive definite! Regularize
-        evals_reg = np.maximum(evals, eps)
-        sigma_sym = evecs @ np.diag(evals_reg) @ evecs.T
-
-    inv_sigma = np.linalg.pinv(sigma_sym)
-    ones = np.ones((N, 1))
-
-    # Unconstrained analytical Markowitz solution:
-    denom = ones.T @ inv_sigma @ ones
-    w_unconstrained = (inv_sigma @ ones) / denom
-    w_unconstrained = w_unconstrained.flatten()
+    evals_reg = np.maximum(evals, eps)
+    sigma_sym = evecs @ np.diag(evals_reg) @ evecs.T
 
     if not long_only:
-        return w_unconstrained
+        inv_sigma = np.linalg.pinv(sigma_sym)
+        ones = np.ones((N, 1))
+        denom = ones.T @ inv_sigma @ ones
+        w_unconstrained = (inv_sigma @ ones) / denom
+        return w_unconstrained.flatten()
 
-    # Long-only projection with clipping and re-normalization
-    w_long = np.maximum(w_unconstrained, 0.0)
-    if w_long.sum() < 1e-8:
-        # Fallback to 1/N if all negative
-        w_long = np.ones(N) / float(N)
+    # Exact Quadratic Programming for Long-Only Box-Constrained Portfolio:
+    def objective(w):
+        return float(w @ sigma_sym @ w)
+
+    def obj_grad(w):
+        return 2.0 * (sigma_sym @ w)
+
+    w0 = np.ones(N) / float(N)
+    bounds = [(0.0, max_weight) for _ in range(N)]
+    constraints = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0, 'jac': lambda w: np.ones(N)}]
+
+    res = minimize(
+        objective,
+        w0,
+        jac=obj_grad,
+        method='SLSQP',
+        bounds=bounds,
+        constraints=constraints,
+        options={'maxiter': 100, 'ftol': 1e-9}
+    )
+    if res.success:
+        return res.x
     else:
-        w_long = w_long / w_long.sum()
-
-    # Cap max weight to prevent over-concentration
-    w_capped = np.minimum(w_long, max_weight)
-    w_capped = w_capped / w_capped.sum()
-    return w_capped
+        # Fallback to normalized inverse-variance risk parity
+        diag = np.diag(sigma_sym)
+        inv_var = 1.0 / np.maximum(diag, eps)
+        w_rp = inv_var / np.sum(inv_var)
+        w_rp = np.minimum(w_rp, max_weight)
+        return w_rp / np.sum(w_rp)
 
 
 class ClassicalBaselines:

@@ -15,7 +15,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple
+from typing import Tuple, Optional
 
 
 def sym_matrix_log(A: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -276,22 +276,30 @@ def sample_geodesic_flow(
     model: AssetEquivariantMarketFlowNet,
     context: torch.Tensor,
     num_steps: int = 5,
-    device: str = "cpu"
+    device: str = "cpu",
+    prior_m: Optional[torch.Tensor] = None
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Fast Geodesic ODE Solver on S_{++}^N (5-step Euler Integration).
-    Initializes at Identity Prior: log(I_N) = 0.
-    Integrates straight tangent vector field.
+    Initializes at Historical Context Empirical Prior M_ctx in Lie algebra Sym(N).
+    Integrates dynamic geodesic vector field along the manifold.
     Retracts to SPD manifold via Matrix Exponential: Sigma = Exp(M_1).
     """
     model.eval()
     B, L, N = context.shape
     H = model.horizon
 
-    # Prior Base Sample at t = 0
-    R = torch.randn(B, H, N, device=device) * 0.05
-    # Uninformative Identity Prior on SPD manifold: log(I_N) = 0
-    M = torch.zeros(B, N, N, device=device)
+    # Prior Base Return Sample at t = 0
+    R = torch.randn(B, H, N, device=device) * 0.02
+    
+    # Historical Trailing Context Prior on SPD Manifold: M_0 = log(Sigma_ctx)
+    if prior_m is None:
+        c_mean = context.mean(dim=1, keepdim=True)
+        c_diff = context - c_mean
+        c_sigma = (c_diff.transpose(1, 2) @ c_diff) / float(L - 1) + 1e-5 * torch.eye(N, device=device)
+        M = sym_matrix_log(c_sigma)
+    else:
+        M = prior_m.clone().to(device)
 
     dt = 1.0 / num_steps
     for step in range(num_steps):

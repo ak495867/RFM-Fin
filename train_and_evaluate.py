@@ -89,9 +89,10 @@ def train_rfm_model(
             M_1 = batch['target_m'].to(device)          # (B, N, N)
             B = context.shape[0]
 
-            # 1. Base Prior Noise at t = 0
-            R_0 = torch.randn(B, horizon, num_assets, device=device) * 0.05
-            M_0 = torch.zeros(B, num_assets, num_assets, device=device) # log(I_N) = 0
+            # 1. Base Prior Sample at t = 0: Historical Trailing Context Covariance in Lie algebra
+            R_0 = torch.randn(B, horizon, num_assets, device=device) * 0.02
+            M_0 = batch['context_m'].to(device) + torch.randn(B, num_assets, num_assets, device=device) * 0.05
+            M_0 = 0.5 * (M_0 + M_0.transpose(-1, -2))
 
             # 2. Sample Flow Time t ~ U[0, 1]
             t = torch.rand(B, 1, device=device)
@@ -138,8 +139,8 @@ def train_rfm_model(
                     v_M1 = vbatch['target_m'].to(device)
                     v_B = v_ctx.shape[0]
 
-                    v_R0 = torch.randn(v_B, horizon, num_assets, device=device) * 0.05
-                    v_M0 = torch.zeros(v_B, num_assets, num_assets, device=device)
+                    v_R0 = torch.randn(v_B, horizon, num_assets, device=device) * 0.02
+                    v_M0 = vbatch['context_m'].to(device)
                     v_t = torch.rand(v_B, 1, device=device)
 
                     v_Rt = (1.0 - v_t.view(v_B, 1, 1)) * v_R0 + v_t.view(v_B, 1, 1) * v_R1
@@ -202,9 +203,10 @@ def run_out_of_sample_backtest(
         ctx_np = context.squeeze(0).cpu().numpy()       # (L, N)
         N = ctx_np.shape[1]
 
-        # 1. RFM-Fin 5-Step Geodesic Forecast
+        # 1. RFM-Fin 5-Step Geodesic Forecast using Historical Context Empirical Prior
         with torch.no_grad():
-            _, rfm_sigma = sample_geodesic_flow(model, context, num_steps=5, device=device)
+            prior_m = batch['context_m'].to(device)
+            _, rfm_sigma = sample_geodesic_flow(model, context, num_steps=5, device=device, prior_m=prior_m)
             rfm_sigma_np = rfm_sigma.squeeze(0).cpu().numpy()
 
         # 2. Classical Baseline Covariance Forecasts
@@ -301,10 +303,11 @@ def main():
     # 4. Stress Tests & Monte Carlo Verification
     sample_batch = next(iter(test_loader))
     test_context = sample_batch['context'].to(device)
+    test_prior_m = sample_batch['context_m'].to(device)
 
-    perturbation_results = run_noise_perturbation_test(model, test_context, device=device)
-    ode_results = run_ode_convergence_test(model, test_context, device=device)
-    perm_err = run_permutation_monte_carlo(model, test_context, num_trials=10, device=device)
+    perturbation_results = run_noise_perturbation_test(model, test_context, device=device, prior_m=test_prior_m)
+    ode_results = run_ode_convergence_test(model, test_context, device=device, prior_m=test_prior_m)
+    perm_err = run_permutation_monte_carlo(model, test_context, num_trials=10, device=device, prior_m=test_prior_m)
 
     # 5. Save Artifact
     full_output = {

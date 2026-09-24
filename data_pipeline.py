@@ -86,7 +86,7 @@ def download_market_data(
         return df
 
     print(f"[Data] Downloading historical prices for {len(tickers)} assets ({start_date} to {end_date})...")
-    data = yf.download(tickers, start=start_date, end=end_date, progress=False)
+    data = yf.download(tickers, start=start_date, end=end_date, progress=False, auto_adjust=False)
     
     # Handle multi-level columns if present
     if isinstance(data.columns, pd.MultiIndex):
@@ -155,6 +155,12 @@ class FinancialManifoldDataset(Dataset):
         # 1. Past Context Window (strictly [t - lookback_len + 1 : t + 1])
         c_returns = self.returns[t - self.lookback_len + 1 : t + 1] # Shape: (L, N)
 
+        # Compute Historical Trailing Covariance and Tangent State (Empirical Prior on S_{++}^N)
+        c_mean = c_returns.mean(dim=0, keepdim=True)
+        c_diff = c_returns - c_mean
+        c_sigma = (c_diff.T @ c_diff) / float(self.lookback_len - 1) + self.eps * torch.eye(self.num_assets, dtype=torch.float32)
+        c_tangent = sym_matrix_log(c_sigma.unsqueeze(0), eps=self.eps).squeeze(0)
+
         # 2. Forward Horizon Window (strictly [t + 1 : t + forecast_horizon + 1])
         f_returns = self.returns[t + 1 : t + self.forecast_horizon + 1] # Shape: (H, N)
 
@@ -176,6 +182,8 @@ class FinancialManifoldDataset(Dataset):
 
         return {
             'context': c_returns,
+            'context_sigma': c_sigma,
+            'context_m': c_tangent,
             'target_returns': f_returns,
             'target_sigma': sigma,
             'target_m': m_tangent,
