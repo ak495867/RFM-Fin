@@ -277,7 +277,8 @@ def sample_geodesic_flow(
     context: torch.Tensor,
     num_steps: int = 5,
     device: str = "cpu",
-    prior_m: Optional[torch.Tensor] = None
+    prior_m: Optional[torch.Tensor] = None,
+    deterministic: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Fast Geodesic ODE Solver on S_{++}^N (5-step Euler Integration).
@@ -290,7 +291,10 @@ def sample_geodesic_flow(
     H = model.horizon
 
     # Prior Base Return Sample at t = 0
-    R = torch.randn(B, H, N, device=device) * 0.02
+    if deterministic:
+        R = torch.zeros(B, H, N, device=device)
+    else:
+        R = torch.randn(B, H, N, device=device) * 0.02
     
     # Historical Trailing Context Prior on SPD Manifold: M_0 = log(Sigma_ctx)
     if prior_m is None:

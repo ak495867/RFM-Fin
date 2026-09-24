@@ -164,7 +164,7 @@ def run_permutation_monte_carlo(
     print("="*75)
 
     B, L, N = context.shape
-    _, base_sigma = sample_geodesic_flow(model, context, num_steps=5, device=device, prior_m=prior_m)
+    _, base_sigma = sample_geodesic_flow(model, context, num_steps=5, device=device, prior_m=prior_m, deterministic=True)
 
     max_perm_errors = []
     for _ in range(num_trials):
@@ -175,7 +175,7 @@ def run_permutation_monte_carlo(
         ctx_perm = context @ P.T
         prior_m_perm = None if prior_m is None else P.unsqueeze(0) @ prior_m @ P.T.unsqueeze(0)
 
-        _, sigma_perm = sample_geodesic_flow(model, ctx_perm, num_steps=5, device=device, prior_m=prior_m_perm)
+        _, sigma_perm = sample_geodesic_flow(model, ctx_perm, num_steps=5, device=device, prior_m=prior_m_perm, deterministic=True)
 
         # Expected: P @ base_sigma @ P^T
         expected = P.unsqueeze(0) @ base_sigma @ P.T.unsqueeze(0)
