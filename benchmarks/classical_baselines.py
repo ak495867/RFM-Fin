@@ -35,11 +35,13 @@ def solve_minimum_variance_weights(
     sigma: np.ndarray,
     long_only: bool = True,
     max_weight: float = 0.20,
+    prev_weights: Optional[np.ndarray] = None,
+    turnover_penalty: float = 0.0,
     eps: float = 1e-6
 ) -> np.ndarray:
     """
     Computes optimal Markowitz minimum-variance portfolio weights:
-      min w^T Sigma w  s.t.  1^T w = 1,  0 <= w_i <= max_weight
+      min w^T Sigma w + lambda ||w - w_prev||^2  s.t.  1^T w = 1,  0 <= w_i <= max_weight
       
     If long_only=True, solves exact Quadratic Programming via SLSQP.
     """
@@ -60,13 +62,22 @@ def solve_minimum_variance_weights(
         return w_unconstrained.flatten()
 
     # Exact Quadratic Programming for Long-Only Box-Constrained Portfolio:
+    use_to = (prev_weights is not None) and (turnover_penalty > 0.0)
+    w_prev = prev_weights if use_to else np.zeros(N)
+
     def objective(w):
-        return float(w @ sigma_sym @ w)
+        var = float(w @ sigma_sym @ w)
+        if use_to:
+            var += turnover_penalty * float(np.sum((w - w_prev) ** 2))
+        return var
 
     def obj_grad(w):
-        return 2.0 * (sigma_sym @ w)
+        grad = 2.0 * (sigma_sym @ w)
+        if use_to:
+            grad += 2.0 * turnover_penalty * (w - w_prev)
+        return grad
 
-    w0 = np.ones(N) / float(N)
+    w0 = prev_weights if (prev_weights is not None) else (np.ones(N) / float(N))
     bounds = [(0.0, max_weight) for _ in range(N)]
     constraints = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0, 'jac': lambda w: np.ones(N)}]
 

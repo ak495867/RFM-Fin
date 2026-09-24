@@ -187,6 +187,7 @@ def run_out_of_sample_backtest(
         'Sample Covariance': [],
         'Equal-Weight (1/N)': []
     }
+    weights_history = {k: [] for k in strategies}
 
     dates_tracked = []
     model.eval()
@@ -206,7 +207,7 @@ def run_out_of_sample_backtest(
         # 1. RFM-Fin 5-Step Geodesic Forecast using Historical Context Empirical Prior
         with torch.no_grad():
             prior_m = batch['context_m'].to(device)
-            _, rfm_sigma = sample_geodesic_flow(model, context, num_steps=5, device=device, prior_m=prior_m)
+            _, rfm_sigma = sample_geodesic_flow(model, context, num_steps=5, device=device, prior_m=prior_m, deterministic=True)
             rfm_sigma_np = rfm_sigma.squeeze(0).cpu().numpy()
 
         # 2. Classical Baseline Covariance Forecasts
@@ -221,6 +222,12 @@ def run_out_of_sample_backtest(
         w_sample = solve_minimum_variance_weights(sample_sigma, long_only=True)
         w_eq = np.ones(N) / float(N)
 
+        weights_history['RFM-Fin (Ours)'].append(w_rfm)
+        weights_history['Ledoit-Wolf'].append(w_lw)
+        weights_history['DCC-GARCH / EWMA'].append(w_dcc)
+        weights_history['Sample Covariance'].append(w_sample)
+        weights_history['Equal-Weight (1/N)'].append(w_eq)
+
         # 4. Forward Realized Daily Portfolio Returns
         strategies['RFM-Fin (Ours)'].append(fwd_returns @ w_rfm)
         strategies['Ledoit-Wolf'].append(fwd_returns @ w_lw)
@@ -230,8 +237,8 @@ def run_out_of_sample_backtest(
 
     # Aggregate full out-of-sample return series
     print("\n--- Out-of-Sample Performance Summary Table (2024 - 2026) ---")
-    print(f"{'Strategy':<22} | {'Ann. Vol':<12} | {'Sharpe':<10} | {'Sortino':<10} | {'Max DD':<12} | {'Total Ret':<10}")
-    print("-" * 85)
+    print(f"{'Strategy':<22} | {'Ann. Vol':<10} | {'Sharpe':<8} | {'Sortino':<8} | {'Max DD':<10} | {'Total Ret':<10} | {'Turnover':<10} | {'Net Sharpe':<10}")
+    print("-" * 105)
 
     summary_metrics = {}
     for name, return_windows in strategies.items():
@@ -256,17 +263,27 @@ def run_out_of_sample_backtest(
         max_dd = np.min(dd)
         total_ret = wealth[-1] - 1.0
 
-        print(f"{name:<22} | {ann_vol*100.0:<10.2f}% | {sharpe:<10.2f} | {sortino:<10.2f} | {max_dd*100.0:<10.2f}% | {total_ret*100.0:<8.2f}%")
+        # Turnover & Cost-adjusted metrics (10 bps fee drag per 100% turnover)
+        ws = weights_history[name]
+        turnover_list = [0.5 * np.sum(np.abs(ws[t_i + 1] - ws[t_i])) for t_i in range(len(ws) - 1)]
+        avg_turnover = float(np.mean(turnover_list)) * 100.0 if len(turnover_list) > 0 else 0.0
+        ann_cost = 12.6 * (avg_turnover / 100.0) * 0.0010
+        net_ann_ret = ann_ret - ann_cost
+        net_sharpe = net_ann_ret / ann_vol
+
+        print(f"{name:<22} | {ann_vol*100.0:<8.2f}% | {sharpe:<8.2f} | {sortino:<8.2f} | {max_dd*100.0:<8.2f}% | {total_ret*100.0:<8.2f}% | {avg_turnover:<8.1f}% | {net_sharpe:<8.2f}")
 
         summary_metrics[name] = {
             'Annualized Volatility': float(ann_vol),
             'Sharpe Ratio': float(sharpe),
             'Sortino Ratio': float(sortino),
             'Max Drawdown': float(max_dd),
-            'Total Return': float(total_ret)
+            'Total Return': float(total_ret),
+            'Monthly Turnover': float(avg_turnover),
+            'Net Sharpe (10bps)': float(net_sharpe)
         }
 
-    print("-" * 85)
+    print("-" * 105)
     return summary_metrics
 
 
